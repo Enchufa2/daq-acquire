@@ -10,8 +10,8 @@ AC_PROG_RANLIB
 AM_PROG_AR
 
 # Checks for libraries
-AC_CHECK_LIB([m], [cos], [LIBS+="-lm "], [AC_MSG_ERROR([math required])])
-AC_CHECK_LIB([comedi], [comedi_open], [LIBS+="-lcomedi "], [AC_MSG_ERROR([comedilib required])])
+AC_CHECK_LIB([m], [cos],, [AC_MSG_ERROR([math required])])
+AC_CHECK_LIB([comedi], [comedi_open], [LIBS="-lcomedi -lm "], [AC_MSG_ERROR([comedilib required])])
 
 # Checks for header files
 AC_CHECK_HEADERS([sched.h],, [AC_MSG_ERROR([<sched.h> required])])
