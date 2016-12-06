@@ -1,5 +1,5 @@
 /*
- * daq_acquire: small utility to acquire samples with Comedi-supported DAQ cards
+ * daq-acquire: small utility to acquire samples with Comedi-supported DAQ cards
  * Copyright(c) 2013-2016 by Iñaki Ucar <i.ucar86@gmail.com>
  * This program is published under a MIT license
  */
@@ -55,7 +55,7 @@ int get_converter(comedi_t *device, comedi_polynomial_t *converter, int flags);
 void set_sched() {
 	struct sched_param param;
 	cpu_set_t mask;
-	
+
 	sched_getparam(0, &param);
 	param.sched_priority = sched_get_priority_max(SCHED_FIFO);
 	sched_setscheduler(0, SCHED_FIFO, &param);
@@ -77,17 +77,17 @@ int main(int argc, char *argv[]) {
 	int			n, back, front;
 	void  			*map;
 	long double		init;
-	
+
 	parse_options(argc, argv);
 	//set_sched();
-	
+
 	/* open the device */
 	dev = comedi_open(options.filename);
 	if (!dev) {
 		comedi_perror(options.filename);
 		exit(1);
 	}
-	
+
 	// flags & bytes per sample
 	subdev_flags = comedi_get_subdevice_flags(dev, options.subdevice);
 	if (subdev_flags < 0) {
@@ -97,11 +97,11 @@ int main(int argc, char *argv[]) {
 	if (subdev_flags & SDF_LSAMPL)
 		bytes_per_sample = sizeof(lsampl_t);
 	else bytes_per_sample = sizeof(sampl_t);
-	
+
 	// get converter from calibration file
 	ret = get_converter(dev, &converter, subdev_flags);
 	if (ret < 0) exit(1);
-	
+
 	// prepare mmap
 	size = comedi_get_buffer_size(dev, options.subdevice);
 	map = mmap(NULL, size, PROT_READ, MAP_SHARED, comedi_fileno(dev), 0);
@@ -109,20 +109,20 @@ int main(int argc, char *argv[]) {
 		perror("mmap");
 		exit(1);
 	}
-	
+
 	/* Set up channel list */
 	for (i = 0; i < options.n_chan; i++) {
 		chanlist[i] = CR_PACK(options.channel[i], options.range, options.aref);
 	}
-	
+
 	/* prepare_cmd_lib() uses a Comedilib routine to find a
 	 * good command for the device.  prepare_cmd() explicitly
 	 * creates a command, which may not work for your device. */
 	prepare_cmd_lib(dev, &cmd, chanlist, 1e9 / options.freq);
-	
+
 	/* test the command */
 	real_period = double_check_cmd(dev, &cmd);
-	
+
 	/* start the command */
 	init = clock_init();
 	ret = comedi_command(dev, &cmd);
@@ -130,7 +130,7 @@ int main(int argc, char *argv[]) {
 		comedi_perror("comedi_command");
 		exit(1);
 	}
-	
+
 	/* read */
 	front = back = n = 0;
 	while(1) {
@@ -143,31 +143,31 @@ int main(int argc, char *argv[]) {
 			usleep(10000);
 			continue;
 		}
-		
+
 		for (i = back; i < front; i += bytes_per_sample) {
 			if (subdev_flags & SDF_LSAMPL)
 				raw = *(lsampl_t *)((char*)map + (i % size));
 			else raw = *(sampl_t *)((char*)map + (i % size));
 			print_datum(init, real_period, raw, &converter, &n);
 		}
-		
+
 		ret = comedi_mark_buffer_read(dev, options.subdevice, front - back);
 		if (ret < 0) {
 			comedi_perror("comedi_mark_buffer_read");
 			break;
-		}        
+		}
 		back = front;
 	}
 	comedi_close(dev);
-        
+
 	return 0;
 }
 
 void help() {
-    fprintf(stderr, 
+    fprintf(stderr,
 		"Small utility to acquire samples with Comedi-supported DAQ cards.\n"
 		"\n"
-		"Usage: ./daq_acquire [options]\n"
+		"Usage: ./daq-acquire [options]\n"
 		"\n"
 		"Options:\n"
 		"  -h           show help\n"
@@ -192,15 +192,15 @@ void info() {
     	comedi_perror(options.filename);
     	exit(1);
     }
-    
+
     fprintf(stderr, "Selected device: %s | Driver: %s\n\n", comedi_get_board_name(dev), comedi_get_driver_name(dev));
 
     int i, n, type, flags;
     type = comedi_get_subdevice_type(dev, options.subdevice);
     flags = comedi_get_subdevice_flags(dev, options.subdevice);
-    
+
     fprintf(stderr, "Selected subdevice: %i\n", options.subdevice);
-    
+
     if ((n = comedi_get_n_ranges(dev, options.subdevice, 0)) > -1) {
 		fprintf(stderr, "  - Range(id): ");
 		for (i=0; i<n; i++) {
@@ -209,7 +209,7 @@ void info() {
 		}
 		fprintf(stderr, "\n");
     }
-	
+
 	if (type == COMEDI_SUBD_AI || type == COMEDI_SUBD_AO) {
 		fprintf(stderr, "  - ARef(id) : ");
 		if (flags & SDF_GROUND)
@@ -223,14 +223,14 @@ void info() {
 		fprintf(stderr, "\n");
 	}
 	fprintf(stderr, "\n");
-	
+
 	if (type == COMEDI_SUBD_AI || type == COMEDI_SUBD_DI || type == COMEDI_SUBD_DIO) {
 		fprintf(stderr, "Selected channels: ");
 		for (i=0; i<options.n_chan; i++)
 			fprintf(stderr, "%i ", options.channel[i]);
 		fprintf(stderr, "\n\n");
 	}
-	
+
 	const char * const subdevice_types[] = {
 		"| (unused)    ",
 		"| AI          ",
@@ -250,13 +250,13 @@ void info() {
 		"| (error)     ",
 		"| (unknown)   "
 	};
-    
+
     fprintf(stderr, "Subdev | Type        | Buffer   | Channels | Ranges   \n");
     fprintf(stderr, "------------------------------------------------------\n");
     n = comedi_get_n_subdevices(dev);
     for (i=0; i<n; i++) {
     	fprintf(stderr, "%6i ", i);
-    	
+
     	type = comedi_get_subdevice_type(dev, i);
     	if (type < 0)
     		fputs(subdevice_unknown[0], stderr);
@@ -264,14 +264,14 @@ void info() {
     		fputs(subdevice_types[type], stderr);
 		else
 			fputs(subdevice_unknown[1], stderr);
-    	
+
     	fprintf(stderr, "| %8i ", comedi_get_buffer_size(dev, i));
     	fprintf(stderr, "| %8i ", comedi_get_n_channels(dev, i));
     	fprintf(stderr, "| %8i ", comedi_get_n_ranges(dev, i, 0));
     	fprintf(stderr, "\n");
     }
     fprintf(stderr, "\n");
-    
+
     comedi_close(dev);
 }
 
@@ -354,7 +354,7 @@ int prepare_cmd_lib(comedi_t *dev, comedi_cmd *cmd, unsigned int chanlist[], uns
 	cmd->chanlist_len = options.n_chan;
 	if (options.n_scan > 0)
 		cmd->stop_src = TRIG_COUNT;
-	else 
+	else
 		cmd->stop_src = TRIG_NONE; // captura continua
 	cmd->stop_arg = options.n_scan;
 
@@ -397,7 +397,7 @@ unsigned int double_check_cmd(comedi_t *dev, comedi_cmd *cmd) {
 long double clock_init() {
 	static long double init;
 	struct timespec ts;
-	
+
 	if (!init) {
 		if (clock_gettime(CLOCK_REALTIME, &ts)) {
 			    perror("clock_gettime");
@@ -405,7 +405,7 @@ long double clock_init() {
 		}
 		init = ts.tv_sec+ts.tv_nsec/1000000000.0L;
 	}
-	
+
 	return init;
 }
 
@@ -414,24 +414,24 @@ void print_datum(long double init, unsigned int period, lsampl_t raw, const come
 	static int col = 0;
 	static int isamples;
 	static double buf[N_CHANS];
-	
+
 	if (!isamples) isamples = options.integrate;
-	
+
 	buf[col] += comedi_to_physical(raw, converter);
-	
+
 	if (++col == options.n_chan) {
 		col = 0;
 		if (!--isamples) {
 			//time
 			if (!options.fulltime) printf("%.7Lf ", t);
 			else printf("%.7Lf ", init+t);
-			
+
 			//measures
 			for (int i=0; i<options.n_chan; i++) {
 				printf("%8.6f ", buf[i]/((double)options.integrate));
 				buf[i] = 0;
 			}
-			
+
 			//end
 			printf("\n");
 			//isamples = options.integrate;

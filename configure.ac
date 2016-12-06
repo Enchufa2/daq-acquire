@@ -1,5 +1,5 @@
 # Init
-AC_INIT([daq_acquire], [0.0.1], [i.ucar86@gmail.com])
+AC_INIT([daq-acquire], [0.0.1], [i.ucar86@gmail.com])
 AM_INIT_AUTOMAKE([-Wall -Werror foreign])
 AC_GNU_SOURCE
 CFLAGS="$CFLAGS -pedantic -Wall -std=gnu99"

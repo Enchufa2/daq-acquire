@@ -16,6 +16,6 @@ stamp-h?
 .deps
 .dirstamp
 lib*.a
-daq_acquire
+daq-acquire
 *.o
 *~
