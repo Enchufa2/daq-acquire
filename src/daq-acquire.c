@@ -25,7 +25,7 @@ struct parsed_options {
 	int 		n_chan;
 	int 		aref;
 	int 		range;
-	double 		freq;
+	double 	freq;
 	int 		n_scan;
 	int 		verbose;
 	int 		integrate;
@@ -48,8 +48,7 @@ struct parsed_options options = {
 
 void parse_options(int argc, char *argv[]);
 int prepare_cmd_lib(comedi_t *dev, comedi_cmd *cmd, unsigned int chanlist[], unsigned scan_period_nanosec);
-unsigned int double_check_cmd(comedi_t *dev, comedi_cmd *cmd);
-long double clock_init();
+int double_check_cmd(comedi_t *dev, comedi_cmd *cmd);
 void print_datum(long double init, unsigned int period, lsampl_t raw, const comedi_polynomial_t *converter, int *n);
 int get_converter(comedi_t *device, comedi_polynomial_t *converter, int flags);
 void set_sched() {
@@ -66,48 +65,51 @@ void set_sched() {
 }
 
 int main(int argc, char *argv[]) {
-	comedi_t 		*dev;
-	comedi_cmd 		cmd;
-	unsigned int 		chanlist[N_CHANS];
-	lsampl_t 		raw;
+	comedi_t 							*dev;
+	comedi_cmd 						cmd;
+	unsigned int 					chanlist[N_CHANS];
+	lsampl_t 							raw;
 	comedi_polynomial_t 	converter;
-	unsigned int		real_period;
-	int 			ret, i, subdev_flags;
-	int 			bytes_per_sample, size;
-	int			n, back, front;
-	void  			*map;
-	long double		init;
+	int 									i, subdev_flags, ret = 0;
+	int 									bytes_per_sample, size;
+	int										n, back, front;
+	void  								*map;
+	struct timespec 			ts;
+	long double						init;
 
 	parse_options(argc, argv);
 	//set_sched();
 
 	/* open the device */
-	dev = comedi_open(options.filename);
-	if (!dev) {
+	if (!(dev = comedi_open(options.filename))) {
 		comedi_perror(options.filename);
-		exit(1);
+		goto end;
 	}
 
 	// flags & bytes per sample
-	subdev_flags = comedi_get_subdevice_flags(dev, options.subdevice);
-	if (subdev_flags < 0) {
+	if ((ret = comedi_get_subdevice_flags(dev, options.subdevice)) < 0) {
 		comedi_perror("comedi_get_subdevice_flags");
-		exit(1);
+		goto clean_dev;
 	}
-	if (subdev_flags & SDF_LSAMPL)
+	if ((subdev_flags = ret) & SDF_LSAMPL)
 		bytes_per_sample = sizeof(lsampl_t);
 	else bytes_per_sample = sizeof(sampl_t);
 
 	// get converter from calibration file
-	ret = get_converter(dev, &converter, subdev_flags);
-	if (ret < 0) exit(1);
+	if ((ret = get_converter(dev, &converter, subdev_flags)) < 0)
+		goto clean_dev;
 
 	// prepare mmap
-	size = comedi_get_buffer_size(dev, options.subdevice);
+	if ((size = comedi_get_buffer_size(dev, options.subdevice)) < 0) {
+		comedi_perror("comedi_get_buffer_size");
+		ret = size;
+		goto clean_dev;
+	}
 	map = mmap(NULL, size, PROT_READ, MAP_SHARED, comedi_fileno(dev), 0);
 	if (map == MAP_FAILED) {
 		perror("mmap");
-		exit(1);
+		ret = -1;
+		goto clean_dev;
 	}
 
 	/* Set up channel list */
@@ -118,17 +120,22 @@ int main(int argc, char *argv[]) {
 	/* prepare_cmd_lib() uses a Comedilib routine to find a
 	 * good command for the device.  prepare_cmd() explicitly
 	 * creates a command, which may not work for your device. */
-	prepare_cmd_lib(dev, &cmd, chanlist, 1e9 / options.freq);
+	if((ret = prepare_cmd_lib(dev, &cmd, chanlist, 1e9 / options.freq)) < 0)
+		goto clean_map;
 
 	/* test the command */
-	real_period = double_check_cmd(dev, &cmd);
+	if((ret = double_check_cmd(dev, &cmd)) < 0)
+		goto clean_map;
 
 	/* start the command */
-	init = clock_init();
-	ret = comedi_command(dev, &cmd);
-	if (ret < 0) {
+	if ((ret = clock_gettime(CLOCK_REALTIME, &ts))) {
+    perror("clock_gettime");
+    goto clean_map;
+	}
+	init = ts.tv_sec + ts.tv_nsec/1000000000.0L;
+	if ((ret = comedi_command(dev, &cmd)) < 0) {
 		comedi_perror("comedi_command");
-		exit(1);
+		goto clean_map;
 	}
 
 	/* read */
@@ -136,8 +143,8 @@ int main(int argc, char *argv[]) {
 	while(1) {
 		front += comedi_get_buffer_contents(dev, options.subdevice);
 		if(options.verbose) fprintf(stderr, "front = %d, back = %d\n", front, back);
-		if(front < back) break;
-		if (front == back) {
+		if((ret = front - back) < 0) break;
+		if (ret == 0) {
 			if (options.n_scan > 0 && n >= options.n_scan) break;
 			//comedi_poll(dev, options.subdevice);
 			usleep(10000);
@@ -148,7 +155,7 @@ int main(int argc, char *argv[]) {
 			if (subdev_flags & SDF_LSAMPL)
 				raw = *(lsampl_t *)((char*)map + (i % size));
 			else raw = *(sampl_t *)((char*)map + (i % size));
-			print_datum(init, real_period, raw, &converter, &n);
+			print_datum(init, cmd.scan_begin_arg, raw, &converter, &n);
 		}
 
 		ret = comedi_mark_buffer_read(dev, options.subdevice, front - back);
@@ -158,9 +165,13 @@ int main(int argc, char *argv[]) {
 		}
 		back = front;
 	}
-	comedi_close(dev);
 
-	return 0;
+clean_map:
+	munmap(map, size);
+clean_dev:
+	comedi_close(dev);
+end:
+	return ret;
 }
 
 void help() {
@@ -193,7 +204,8 @@ void info() {
     	exit(1);
     }
 
-    fprintf(stderr, "Selected device: %s | Driver: %s\n\n", comedi_get_board_name(dev), comedi_get_driver_name(dev));
+    fprintf(stderr, "Selected device: %s | Driver: %s\n\n",
+						comedi_get_board_name(dev), comedi_get_driver_name(dev));
 
     int i, n, type, flags;
     type = comedi_get_subdevice_type(dev, options.subdevice);
@@ -335,7 +347,9 @@ void parse_options(int argc, char *argv[]) {
  * This prepares a command in a pretty generic way.  We ask the
  * library to create a stock command that supports periodic
  * sampling of data, then modify the parts we want. */
-int prepare_cmd_lib(comedi_t *dev, comedi_cmd *cmd, unsigned int chanlist[], unsigned scan_period_nanosec) {
+int prepare_cmd_lib(comedi_t *dev, comedi_cmd *cmd, unsigned int chanlist[],
+										unsigned scan_period_nanosec)
+{
 	int ret;
 
 	memset(cmd, 0, sizeof(*cmd));
@@ -343,7 +357,8 @@ int prepare_cmd_lib(comedi_t *dev, comedi_cmd *cmd, unsigned int chanlist[], uns
 	/* This comedilib function will get us a generic timed
 	 * command for a particular board.  If it returns -1,
 	 * that's bad. */
-	ret = comedi_get_cmd_generic_timed(dev, options.subdevice, cmd, options.n_chan, scan_period_nanosec);
+	ret = comedi_get_cmd_generic_timed(dev, options.subdevice, cmd,
+		options.n_chan, scan_period_nanosec);
 	if (ret < 0) {
 		fprintf(stderr, "prepare_cmd_lib: comedi_get_cmd_generic_timed failed\n");
 		return ret;
@@ -361,7 +376,8 @@ int prepare_cmd_lib(comedi_t *dev, comedi_cmd *cmd, unsigned int chanlist[], uns
 	return 0;
 }
 
-unsigned int double_check_cmd(comedi_t *dev, comedi_cmd *cmd) {
+int double_check_cmd(comedi_t *dev, comedi_cmd *cmd) {
+	int ret;
 	/* comedi_command_test() tests a command to see if the
 	 * trigger sources and arguments are valid for the subdevice.
 	 * If a trigger source is invalid, it will be logically ANDed
@@ -372,41 +388,26 @@ unsigned int double_check_cmd(comedi_t *dev, comedi_cmd *cmd) {
 	 * can test it multiple times until it passes.  Typically,
 	 * if you can't get a valid command in two tests, the original
 	 * command wasn't specified very well. */
-	int ret = comedi_command_test(dev, cmd);
-	if (ret < 0) {
+	if ((ret = comedi_command_test(dev, cmd)) < 0) {
 		comedi_perror("comedi_command_test");
 		if (errno == EIO) {
 			fprintf(stderr,"double_check_cmd: ummm... this subdevice doesn't support commands\n");
 		}
-		exit(1);
+		return ret;
 	}
-	ret = comedi_command_test(dev, cmd);
-	if (ret < 0) {
+	if ((ret = comedi_command_test(dev, cmd)) < 0) {
 		comedi_perror("comedi_command_test");
-		exit(1);
+		return ret;
 	}
-	fprintf(stderr,"double_check_cmd: command succesfully tested\n");
-	if (ret != 0) {
+	if (options.verbose)
+		fprintf(stderr, "double_check_cmd: command succesfully tested\n");
+	if (ret > 0) {
 		fprintf(stderr, "double_check_cmd: error preparing command\n");
-		exit(1);
+		return -1;
 	}
-	if (options.verbose) fprintf(stderr, "double_check_cmd: cmd->scan_begin_arg = %u ns\n", cmd->scan_begin_arg);
-	return cmd->scan_begin_arg;
-}
-
-long double clock_init() {
-	static long double init;
-	struct timespec ts;
-
-	if (!init) {
-		if (clock_gettime(CLOCK_REALTIME, &ts)) {
-			    perror("clock_gettime");
-			    exit(1);
-		}
-		init = ts.tv_sec+ts.tv_nsec/1000000000.0L;
-	}
-
-	return init;
+	if (options.verbose)
+		fprintf(stderr, "double_check_cmd: cmd->scan_begin_arg = %u ns\n", cmd->scan_begin_arg);
+	return 0;
 }
 
 void print_datum(long double init, unsigned int period, lsampl_t raw, const comedi_polynomial_t *converter, int *n) {
@@ -443,12 +444,10 @@ void print_datum(long double init, unsigned int period, lsampl_t raw, const come
 
 /* figure out if we are talking to a hardware-calibrated or software-calibrated board,
 	then obtain a comedi_polynomial_t which can be used with comedi_to_physical */
-int get_converter(comedi_t *device, comedi_polynomial_t *converter, int flags)
-{
+int get_converter(comedi_t *device, comedi_polynomial_t *converter, int flags) {
 	int retval;
 
-	if(flags & SDF_SOFT_CALIBRATED) /* board uses software calibration */
-	{
+	if (flags & SDF_SOFT_CALIBRATED) { /* board uses software calibration */
 		char *calibration_file_path = comedi_get_default_calibration_path(device);
 
 		/* parse a calibration file which was produced by the
@@ -456,28 +455,24 @@ int get_converter(comedi_t *device, comedi_polynomial_t *converter, int flags)
 		comedi_calibration_t* parsed_calibration =
 			comedi_parse_calibration_file(calibration_file_path);
 		free(calibration_file_path);
-		if(parsed_calibration == NULL)
-		{
+		if (parsed_calibration == NULL) {
 			comedi_perror("comedi_parse_calibration_file");
 			return -1;
 		}
 
 		/* get the comedi_polynomial_t for the subdevice/channel/range
 			we are interested in */
-		retval = comedi_get_softcal_converter(options.subdevice, options.channel[0], options.range,
-			COMEDI_TO_PHYSICAL, parsed_calibration, converter);
+		retval = comedi_get_softcal_converter(options.subdevice, options.channel[0],
+			options.range, COMEDI_TO_PHYSICAL, parsed_calibration, converter);
 		comedi_cleanup_calibration(parsed_calibration);
-		if(retval < 0)
-		{
+		if (retval < 0) {
 			comedi_perror("comedi_get_softcal_converter");
 			return -1;
 		}
-	}else /* board uses hardware calibration */
-	{
-		retval = comedi_get_hardcal_converter(device, options.subdevice, options.channel[0], options.range,
-			COMEDI_TO_PHYSICAL, converter);
-		if(retval < 0)
-		{
+	} else { /* board uses hardware calibration */
+		retval = comedi_get_hardcal_converter(device, options.subdevice,
+			options.channel[0], options.range, COMEDI_TO_PHYSICAL, converter);
+		if (retval < 0) {
 			comedi_perror("comedi_get_hardcal_converter");
 			return -1;
 		}
